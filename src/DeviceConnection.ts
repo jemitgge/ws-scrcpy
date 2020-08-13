@@ -12,6 +12,7 @@ import { KeyEventListener, KeyInputHandler } from './KeyInputHandler';
 import KeyCodeControlEvent from './controlEvent/KeyCodeControlEvent';
 import FilePushHandler from './FilePushHandler';
 import DragAndPushLogger from './DragAndPushLogger';
+import sio from 'socket.io-client';
 
 const DEVICE_NAME_FIELD_LENGTH = 64;
 const MAGIC = 'scrcpy';
@@ -36,7 +37,8 @@ export interface DeviceMessageListener {
 export class DeviceConnection implements KeyEventListener {
     private static hasTouchListeners = false;
     private static instances: Record<string, DeviceConnection> = {};
-    public readonly ws: WebSocket;
+    //public readonly ws: WebSocket;
+    public readonly io: any;
     private events: ControlEvent[] = [];
     private decoders: Set<Decoder> = new Set<Decoder>();
     private filePushHandlers: Map<Decoder, FilePushHandler> = new Map();
@@ -48,8 +50,9 @@ export class DeviceConnection implements KeyEventListener {
     private clientsCount = -1;
 
     constructor(readonly udid: string, readonly url: string) {
-        this.ws = new WebSocket(url);
-        this.ws.binaryType = 'arraybuffer';
+        //this.ws = new WebSocket(url);
+        //this.ws.binaryType = 'arraybuffer';
+        this.io = sio(url);
         this.init();
     }
 
@@ -206,7 +209,8 @@ export class DeviceConnection implements KeyEventListener {
 
     public stop(): void {
         if (this.hasConnection()) {
-            this.ws.close();
+            //this.ws.close();
+            this.io.close();
         }
         this.decoders.forEach((decoder) => decoder.pause());
         delete DeviceConnection.instances[this.url];
@@ -215,7 +219,8 @@ export class DeviceConnection implements KeyEventListener {
 
     public sendEvent(event: ControlEvent): void {
         if (this.hasConnection()) {
-            this.ws.send(event.toBuffer());
+            // this.ws.send(event.toBuffer());
+            this.io.send(event.toBuffer());
         } else {
             this.events.push(event);
         }
@@ -263,44 +268,51 @@ export class DeviceConnection implements KeyEventListener {
     }
 
     public hasConnection(): boolean {
-        return this.ws && this.ws.readyState === this.ws.OPEN;
+        //return this.ws && this.ws.readyState === this.ws.OPEN;
+        return this.io && this.io.connected;
     }
 
     private init(): void {
-        const ws = this.ws;
-        ws.onerror = (e: Event | string) => {
+        //const ws = this.ws;
+        const io = this.io;
+        io.on('error', (e: Event | string) => {
             if (this.errorListener) {
                 this.errorListener.OnError.call(this.errorListener, e);
             }
-        };
-        ws.onopen = () => {
+        });
+        io.on('connect', () => {
+            console.log('Connect to proxy');
             let e = this.events.shift();
             while (e) {
                 this.sendEvent(e);
                 e = this.events.shift();
             }
-        };
-        ws.onmessage = (e: MessageEvent) => {
-            if (e.data instanceof ArrayBuffer) {
-                const data = new Uint8Array(e.data);
-                const magicBytes = new Uint8Array(e.data, 0, MAGIC.length);
+        });
+        io.on('message', (e: ArrayBuffer) => {
+            if (e instanceof ArrayBuffer) {
+                const data = new Uint8Array(e);
+                const magicBytes = new Uint8Array(e, 0, MAGIC.length);
                 const text = Util.utf8ByteArrayToString(magicBytes);
                 if (text === MAGIC) {
                     if (data.length === DEVICE_INFO_LENGTH) {
                         let offset = MAGIC.length;
-                        let nameBytes = new Uint8Array(e.data, offset, DEVICE_NAME_FIELD_LENGTH);
+                        let nameBytes = new Uint8Array(e, offset, DEVICE_NAME_FIELD_LENGTH);
                         nameBytes = Util.filterTrailingZeroes(nameBytes);
                         this.name = Util.utf8ByteArrayToString(nameBytes);
+                        console.log(this.name);
                         offset += DEVICE_NAME_FIELD_LENGTH;
-                        let temp = new Buffer(new Uint8Array(e.data, offset, ScreenInfo.BUFFER_LENGTH));
+                        let temp = new Buffer(new Uint8Array(e, offset, ScreenInfo.BUFFER_LENGTH));
                         offset += ScreenInfo.BUFFER_LENGTH;
                         const screenInfo: ScreenInfo = ScreenInfo.fromBuffer(temp);
-                        temp = new Buffer(new Uint8Array(e.data, offset, VideoSettings.BUFFER_LENGTH));
+                        console.log(screenInfo);
+                        temp = new Buffer(new Uint8Array(e, offset, VideoSettings.BUFFER_LENGTH));
                         const videoSettings: VideoSettings = VideoSettings.fromBuffer(temp);
+                        console.log(videoSettings);
                         offset += VideoSettings.BUFFER_LENGTH;
-                        temp = new Buffer(new Uint8Array(e.data, offset, CLIENT_ID_LENGTH + CLIENTS_COUNT_LENGTH));
+                        temp = new Buffer(new Uint8Array(e, offset, CLIENT_ID_LENGTH + CLIENTS_COUNT_LENGTH));
                         this.clientId = temp.readInt16BE(0);
                         this.clientsCount = temp.readInt16BE(CLIENT_ID_LENGTH);
+                        console.log(`clientId ${this.clientId}, clientsCount ${this.clientsCount}`);
                         let min: VideoSettings = VideoSettings.copy(videoSettings) as VideoSettings;
                         let playing = false;
                         this.decoders.forEach((decoder) => {
@@ -338,7 +350,7 @@ export class DeviceConnection implements KeyEventListener {
                             this.sendNewVideoSetting(min);
                         }
                     } else {
-                        const message = DeviceMessage.fromBuffer(e.data);
+                        const message = DeviceMessage.fromBuffer(e);
                         if (this.deviceMessageListeners.size) {
                             this.deviceMessageListeners.forEach((listener) => {
                                 listener.OnDeviceMessage(message);
@@ -352,17 +364,17 @@ export class DeviceConnection implements KeyEventListener {
                             decoder.play();
                         }
                         if (decoder.getState() === STATE.PLAYING) {
-                            decoder.pushFrame(new Uint8Array(e.data));
+                            decoder.pushFrame(new Uint8Array(e));
                         }
                     });
                 }
             } else {
-                console.error(`Unexpexted message: ${e.data}`);
+                console.error(`Unexpexted message: ${e}`);
             }
-        };
+        });
 
-        ws.onclose = () => {
+        io.on('close', () => {
             console.log('WS closed');
-        };
+        });
     }
 }

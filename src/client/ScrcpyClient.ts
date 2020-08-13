@@ -24,7 +24,8 @@ export class ScrcpyClient extends BaseClient {
     public static start(params: StreamParams): ScrcpyClient {
         this.getOrCreateControlsWrapper();
         const client = this.getInstance();
-        const decoder = client.startStream(params.udid, params.decoder, `ws://${params.ip}:${params.port}`);
+        //const decoder = client.startStream(params.udid, params.decoder, `ws://${params.ip}:${params.port}`);
+        const decoder = client.startStream(params.udid, params.decoder, 'ws://localhost:3000');
         if (decoder) {
             decoder.showFps = !!params.showFps;
         }
